@@ -6,7 +6,10 @@ import asyncio
 import os
 import sys
 
+from dotenv import load_dotenv
 from webex_byova import BYOVA
+
+load_dotenv()
 
 
 async def main() -> None:

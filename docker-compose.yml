@@ -1,0 +1,11 @@
+services:
+  byods-webhook-server:
+    build: .
+    ports:
+      - "8000:8000"
+      - "${WEBEX_MEDIA_PORT:-50051}:${WEBEX_MEDIA_PORT:-50051}"
+    env_file:
+      - .env
+    environment:
+      WEBEX_MEDIA_HOST: 0.0.0.0
+      WEBEX_MEDIA_PORT: ${WEBEX_MEDIA_PORT:-50051}
