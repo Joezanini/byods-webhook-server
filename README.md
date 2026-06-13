@@ -88,6 +88,10 @@ python scripts/manage_datasources.py schemas list --org-id "$ORG_ID"
 
 The CLI bootstraps Integration tokens and fetches org-scoped Service App tokens via the SDK.
 
+## Deploy to AWS (webhooks + gRPC media)
+
+See **[infra/AWS_DEPLOYMENT.md](infra/AWS_DEPLOYMENT.md)** for the full CDK/ECS setup, public URLs, webhook registration, and BYODS data source URLs (`https://media.atozbuildingcrm.com/grpc`).
+
 ## Deploy to Render (webhooks + health)
 
 Render exposes HTTP only—use it for webhooks and health checks. Set `WEBEX_MEDIA_ENABLED=false` on Render if you host gRPC media elsewhere.
