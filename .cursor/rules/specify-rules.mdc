@@ -5,5 +5,5 @@ alwaysApply: true
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
-at specs/005-persistent-app-state/plan.md
+at specs/006-webex-oauth-callback/plan.md
 <!-- SPECKIT END -->

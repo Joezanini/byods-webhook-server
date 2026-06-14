@@ -5,6 +5,7 @@
 ## What it does
 
 - `POST /webhooks/webex` — serviceApp `authorized` / `deauthorized` webhooks via SDK
+- `GET {WEBEX_INTEGRATION_REDIRECT_URI path}` — Integration OAuth callback (production HTTPS redirect only; localhost uses `register_webhooks.py`)
 - `GET /health` / `GET /ready` — deployment probes
 - **gRPC media** on `WEBEX_MEDIA_PORT` (default `50051`) via SDK `BYOVAMediaServer`
 - **Virtual agent catalog** for Flow Designer via gRPC `ListVirtualAgents` (DynamoDB-backed when `PERSISTENCE_BACKEND=dynamodb`)
@@ -17,7 +18,24 @@ On **authorized**, the SDK stores org-scoped Service App tokens in **DynamoDB** 
 1. [Webex Developer](https://developer.webex.com/) account
 2. **Webex Integration** with scopes: `spark:all`, `spark:applications_token`, `application:webhooks_write`, `application:webhooks_read`
 3. **Webex Service App** with BYODS scopes (`spark-admin:datasource_read`, `spark-admin:datasource_write`)
-4. Redirect URI on Integration: `http://127.0.0.1:8765/callback`
+4. Redirect URI on Integration: `http://127.0.0.1:8765/callback` for local script, or production HTTPS path (e.g. `https://your-host/oauth/webex/callback`) registered in the Webex developer portal
+
+## Integration OAuth (production callback)
+
+When `WEBEX_INTEGRATION_REDIRECT_URI` points at a **non-localhost** HTTPS URL, the server mounts a callback route at that path. Complete OAuth externally (developer portal or printed authorize URL from `register_webhooks.py`); tokens are stored in DynamoDB (`INTEGRATION/CREDS`).
+
+**Precedence**: Durable storage wins over `WEBEX_INTEGRATION_REFRESH_TOKEN` once tokens are persisted. Remove the env refresh token after successful OAuth to avoid confusion.
+
+```bash
+# Production .env excerpt
+WEBEX_INTEGRATION_REDIRECT_URI=https://your-host.example.com/oauth/webex/callback
+WEBEX_WEBHOOK_TARGET_URL=https://your-host.example.com/webhooks/webex
+PERSISTENCE_BACKEND=dynamodb
+PERSISTENCE_ENCRYPTION_KEY=<fernet-key>
+# WEBEX_INTEGRATION_REFRESH_TOKEN=   # optional bootstrap only when storage empty
+```
+
+See `specs/006-webex-oauth-callback/quickstart.md` for validation steps.
 
 ## Local setup
 
@@ -33,7 +51,8 @@ cp .env.example .env
 ## Run the server
 
 ```bash
-export WEBEX_INTEGRATION_REFRESH_TOKEN=...  # after register_webhooks.py
+# Optional bootstrap when DynamoDB has no integration tokens yet:
+# export WEBEX_INTEGRATION_REFRESH_TOKEN=...
 uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
@@ -154,12 +173,21 @@ Expose port `50051` (or `WEBEX_MEDIA_PORT`) publicly for WxCC media. Set `WEBEX_
 
 ## One-time: OAuth and webhook registration
 
+**Local development** (redirect URI `http://127.0.0.1:8765/callback`):
+
 ```bash
 export WEBEX_WEBHOOK_TARGET_URL=https://<your-service>/webhooks/webex
 python scripts/register_webhooks.py
 ```
 
-Copy the Integration refresh token into your deployment as `WEBEX_INTEGRATION_REFRESH_TOKEN`.
+Optionally copy the Integration refresh token into `.env` as bootstrap until you use the production callback.
+
+**Production** (HTTPS redirect URI on the deployed server):
+
+1. Set `WEBEX_INTEGRATION_REDIRECT_URI` and register the same URL in the Webex developer portal.
+2. Run `python scripts/register_webhooks.py` to print the authorize URL, or start OAuth from the portal.
+3. Complete consent in a browser; tokens persist to DynamoDB automatically.
+4. Remove `WEBEX_INTEGRATION_REFRESH_TOKEN` from deployment env after OAuth succeeds.
 
 ## Media configuration
 

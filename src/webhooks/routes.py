@@ -105,7 +105,7 @@ async def webex_webhook(request: Request) -> dict[str, Any]:
         )
         raise HTTPException(
             status_code=503,
-            detail="Integration not authorized; check WEBEX_INTEGRATION_REFRESH_TOKEN",
+            detail="Integration not authorized; complete OAuth callback or check integration tokens",
         ) from exc
 
     log_event(

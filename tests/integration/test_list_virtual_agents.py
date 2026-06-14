@@ -25,6 +25,7 @@ def _test_settings() -> Settings:
         datasource_subject="callAudioData",
         datasource_token_life_minutes=1440,
         integration_refresh_token=None,
+        integration_redirect_uri=None,
         rate_limit_per_minute=None,
         media_echo_enabled=False,
         media_enabled=True,

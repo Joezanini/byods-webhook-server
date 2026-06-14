@@ -12,7 +12,7 @@ Domain: **atozbuildingcrm.com** (Route 53 hosted zone must exist in the target A
 |---------|-----|-------|
 | Webex serviceApp webhooks | `https://hooks.atozbuildingcrm.com/webhooks/webex` | Register this in Webex; set `WEBEX_WEBHOOK_TARGET_URL` |
 | HTTP health probe | `https://hooks.atozbuildingcrm.com/health` | ALB + ECS health checks |
-| Integration readiness | `https://hooks.atozbuildingcrm.com/ready` | Returns 503 until `WEBEX_INTEGRATION_REFRESH_TOKEN` bootstraps |
+| Integration readiness | `https://hooks.atozbuildingcrm.com/ready` | Returns 503 until integration tokens are bootstrapped (DynamoDB or env refresh token) |
 | BYOVA gRPC media (WxCC / Flow Designer) | `https://media.atozbuildingcrm.com` | TLS on port **443**, HTTP/2, gRPC |
 | BYODS data source URL | `https://media.atozbuildingcrm.com/grpc` | **Use this** when creating/updating data sources |
 
@@ -127,9 +127,39 @@ cd infra && npx --yes aws-cdk@2.1126.0 deploy ByodsWebhookStack -c desiredCount=
 
 CDK CLI version must be **≥ 2.1126.0** (schema compatibility with `aws-cdk-lib`).
 
-## Webex webhook registration (one-time per environment)
+## Webex Integration OAuth and webhook registration
 
-Run **locally** after the hooks URL is live. OAuth redirect stays on localhost per Webex Integration config.
+### Production OAuth callback (recommended)
+
+Register a **second** redirect URI on your Webex Integration matching the deployed callback path:
+
+```text
+https://hooks.atozbuildingcrm.com/oauth/webex/callback
+```
+
+Set in Secrets Manager / task env:
+
+```text
+WEBEX_INTEGRATION_REDIRECT_URI=https://hooks.atozbuildingcrm.com/oauth/webex/callback
+```
+
+ALB routes HTTPS to the FastAPI service on the same host; the callback path must reach port 8000. After deploy:
+
+1. Run `python scripts/register_webhooks.py` locally (with production redirect URI in `.env`) to print the authorize URL, **or** start OAuth from the Webex developer portal.
+2. Complete consent in a browser; tokens persist to DynamoDB (`INTEGRATION/CREDS`).
+3. Server startup and callback success run idempotent webhook ensure via SDK `aensure_service_app_webhooks`.
+4. Remove `WEBEX_INTEGRATION_REFRESH_TOKEN` from secrets once DynamoDB holds tokens (storage takes precedence).
+
+Verify:
+
+```bash
+curl -fsS https://hooks.atozbuildingcrm.com/ready
+# {"status":"ok"} when integration tokens are loaded
+```
+
+### Local script fallback (one-time bootstrap)
+
+For initial bootstrap or localhost redirect URI (`http://127.0.0.1:8765/callback`):
 
 ```bash
 # In repo root, with .venv active and .env populated
@@ -137,25 +167,13 @@ export WEBEX_WEBHOOK_TARGET_URL=https://hooks.atozbuildingcrm.com/webhooks/webex
 python scripts/register_webhooks.py
 ```
 
-The script:
+The script opens a browser (localhost redirect), optionally prints `WEBEX_INTEGRATION_REFRESH_TOKEN`, and registers serviceApp webhooks.
 
-1. Opens browser for Integration OAuth (`WEBEX_INTEGRATION_REDIRECT_URI=http://127.0.0.1:8765/callback`).
-2. Prints `WEBEX_INTEGRATION_REFRESH_TOKEN`.
-3. Registers serviceApp webhooks pointing at `WEBEX_WEBHOOK_TARGET_URL`.
-
-After registration:
+After registration with env-only tokens:
 
 ```bash
-# Add refresh token to .env, then sync to AWS
 ./infra/scripts/deploy.sh secrets
 ./infra/scripts/deploy.sh restart
-```
-
-Verify:
-
-```bash
-curl -fsS https://hooks.atozbuildingcrm.com/ready
-# {"status":"ok"} when integration token is loaded
 ```
 
 ## BYODS data source registration
@@ -205,7 +223,8 @@ JSON object synced from `.env` by `deploy.sh secrets`:
 | `WEBEX_INTEGRATION_CLIENT_SECRET` | Yes | Integration OAuth |
 | `WEBEX_SA_CLIENT_ID` | Yes | Service App |
 | `WEBEX_SA_CLIENT_SECRET` | Yes | Service App |
-| `WEBEX_INTEGRATION_REFRESH_TOKEN` | Yes (after webhook registration) | Long-lived Integration token |
+| `WEBEX_INTEGRATION_REFRESH_TOKEN` | Optional bootstrap | Used only when DynamoDB has no `INTEGRATION/CREDS`; remove after production OAuth |
+| `WEBEX_INTEGRATION_REDIRECT_URI` | Yes | Must match Webex portal; HTTPS path mounts callback on server |
 | `PERSISTENCE_ENCRYPTION_KEY` | Yes (production persistence) | Fernet key for org token encryption at rest |
 
 Generate the encryption key locally:

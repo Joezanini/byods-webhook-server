@@ -14,6 +14,11 @@ from src.config.settings import get_settings
 from src.persistence.client import check_table_reachable
 from src.persistence.factory import create_persistence_resources, create_sdk
 from src.webhooks.routes import router as webhooks_router, set_audit_repository, set_sdk
+from src.webhooks.integration_bootstrap import (
+    bootstrap_integration,
+    ensure_service_app_webhooks_if_configured,
+)
+from src.webhooks.oauth_callback import register_oauth_callback_route, set_oauth_dependencies
 
 load_dotenv()
 
@@ -31,27 +36,25 @@ async def lifespan(app: FastAPI):
 
     sdk = create_sdk(settings, persistence.token_storage)
     set_sdk(sdk)
+    set_oauth_dependencies(sdk, persistence.token_storage, settings)
     app.state.sdk = sdk
 
-    refresh_token = settings.integration_refresh_token
-    if refresh_token:
+    integration_ready = await bootstrap_integration(
+        sdk, settings, persistence.token_storage
+    )
+    app.state.integration_ready = integration_ready
+    if not integration_ready:
+        logger.warning(
+            "Integration not ready; complete OAuth via callback URL or set "
+            "WEBEX_INTEGRATION_REFRESH_TOKEN for bootstrap"
+        )
+
+    if integration_ready and settings.webhook_target_url:
         try:
-            tokens = await sdk.integration.arefresh(refresh_token)
-            logger.info(
-                "Integration tokens bootstrapped (expires at %s)",
-                tokens.expires_at,
-            )
-            app.state.integration_ready = True
-        except AuthenticationError as exc:
-            logger.error("Failed to bootstrap Integration tokens: %s", exc)
+            await ensure_service_app_webhooks_if_configured(sdk, settings)
+        except AuthenticationError:
             app.state.integration_ready = False
             raise
-    else:
-        logger.warning(
-            "WEBEX_INTEGRATION_REFRESH_TOKEN is not set; "
-            "authorized webhooks will fail until Integration tokens are available"
-        )
-        app.state.integration_ready = False
 
     if settings.persistence_backend == "dynamodb":
         app.state.persistence_ready = await check_table_reachable(
@@ -128,6 +131,8 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
 
     app.include_router(webhooks_router)
+    if settings.mount_oauth_callback:
+        register_oauth_callback_route(app, settings)
     return app
 
 

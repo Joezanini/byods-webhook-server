@@ -1,4 +1,4 @@
-"""SDK TokenStorage backed by DynamoDB for org-scoped service app tokens."""
+"""SDK TokenStorage backed by DynamoDB for org-scoped and integration tokens."""
 
 from __future__ import annotations
 
@@ -9,6 +9,9 @@ from webex_byova.auth.storage import InMemoryTokenStorage, OAuthTokens, ServiceA
 from src.persistence import encryption as enc
 from src.persistence import org_repository
 from src.persistence.client import DynamoDBTable
+
+_INTEGRATION_PK = "INTEGRATION"
+_INTEGRATION_SK = "CREDS"
 
 
 def _org_pk(org_id: str) -> str:
@@ -31,7 +34,7 @@ def _payload_to_tokens(payload: dict) -> ServiceAppTokens:
     obtained_at = (
         datetime.fromisoformat(obtained_raw)
         if isinstance(obtained_raw, str)
-        else datetime.now()
+        else datetime.now(UTC)
     )
     return ServiceAppTokens(
         access_token=str(payload["access_token"]),
@@ -43,19 +46,72 @@ def _payload_to_tokens(payload: dict) -> ServiceAppTokens:
     )
 
 
+def _oauth_tokens_to_payload(tokens: OAuthTokens) -> dict:
+    return {
+        "access_token": tokens.access_token,
+        "refresh_token": tokens.refresh_token,
+        "expires_in": tokens.expires_in,
+        "token_type": tokens.token_type,
+        "obtained_at": tokens.obtained_at.isoformat(),
+        "refresh_token_expires_in": tokens.refresh_token_expires_in,
+    }
+
+
+def _payload_to_oauth_tokens(payload: dict) -> OAuthTokens:
+    obtained_raw = payload.get("obtained_at")
+    obtained_at = (
+        datetime.fromisoformat(obtained_raw)
+        if isinstance(obtained_raw, str)
+        else datetime.now(UTC)
+    )
+    return OAuthTokens(
+        access_token=str(payload["access_token"]),
+        expires_in=int(payload["expires_in"]),
+        token_type=str(payload.get("token_type", "Bearer")),
+        refresh_token=payload.get("refresh_token"),
+        refresh_token_expires_in=payload.get("refresh_token_expires_in"),
+        obtained_at=obtained_at,
+    )
+
+
 class DynamoDBTokenStorage:
-    """Persist service app tokens per org in DynamoDB; integration tokens in memory only."""
+    """Persist service app tokens per org and integration tokens in DynamoDB."""
 
     def __init__(self, table: DynamoDBTable, *, encryption_key: str) -> None:
         self._table = table
         self._encryption_key = encryption_key
-        self._integration = InMemoryTokenStorage()
 
     async def get_integration_tokens(self) -> OAuthTokens | None:
-        return await self._integration.get_integration_tokens()
+        response = await self._table.get_item(
+            Key={"PK": _INTEGRATION_PK, "SK": _INTEGRATION_SK}
+        )
+        item = response.get("Item")
+        if not item:
+            return None
+        try:
+            payload = enc.decrypt_token_payload(
+                self._encryption_key,
+                str(item["token_blob"]),
+                version=int(item.get("ciphertext_version", enc.CIPHERTEXT_VERSION)),
+            )
+        except Exception:
+            return None
+        return _payload_to_oauth_tokens(payload)
 
     async def set_integration_tokens(self, tokens: OAuthTokens) -> None:
-        await self._integration.set_integration_tokens(tokens)
+        blob, version = enc.encrypt_token_payload(
+            self._encryption_key, _oauth_tokens_to_payload(tokens)
+        )
+        now = datetime.now(UTC).isoformat()
+        await self._table.put_item(
+            Item={
+                "PK": _INTEGRATION_PK,
+                "SK": _INTEGRATION_SK,
+                "token_blob": blob,
+                "ciphertext_version": version,
+                "updated_at": now,
+            }
+        )
 
     async def get_service_app_tokens(self, org_id: str) -> ServiceAppTokens | None:
         response = await self._table.get_item(
@@ -75,8 +131,6 @@ class DynamoDBTokenStorage:
         blob, version = enc.encrypt_token_payload(
             self._encryption_key, _tokens_to_payload(tokens)
         )
-        from datetime import UTC, datetime
-
         now = datetime.now(UTC).isoformat()
         await self._table.put_item(
             Item={
@@ -94,7 +148,6 @@ class DynamoDBTokenStorage:
         await org_repository.mark_deauthorized(self._table, org_id)
 
     async def list_registered_orgs(self) -> list[str]:
-        # Scan for CREDS items (low volume — tens of orgs)
         org_ids: list[str] = []
         scan_kwargs: dict = {
             "FilterExpression": "SK = :sk",
@@ -110,3 +163,6 @@ class DynamoDBTokenStorage:
                 break
             scan_kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
         return sorted(org_ids)
+
+
+__all__ = ["DynamoDBTokenStorage", "InMemoryTokenStorage"]

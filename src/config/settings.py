@@ -36,6 +36,7 @@ class Settings:
     datasource_subject: str
     datasource_token_life_minutes: int
     integration_refresh_token: str | None
+    integration_redirect_uri: str | None
     rate_limit_per_minute: int | None
     media_echo_enabled: bool
     media_enabled: bool
@@ -63,6 +64,25 @@ class Settings:
             suffix = f"/{suffix}"
 
         return f"{parsed.scheme}://{parsed.netloc}{suffix}"
+
+    @property
+    def integration_redirect_path(self) -> str:
+        """URL path for the Integration OAuth callback route."""
+        raw = (self.integration_redirect_uri or "").strip()
+        if not raw:
+            return "/oauth/webex/callback"
+        parsed = urlparse(raw)
+        path = parsed.path or "/oauth/webex/callback"
+        return path if path.startswith("/") else f"/{path}"
+
+    @property
+    def mount_oauth_callback(self) -> bool:
+        """Mount production OAuth callback on FastAPI when redirect URI is not localhost."""
+        raw = (self.integration_redirect_uri or "").strip()
+        if not raw:
+            return False
+        host = (urlparse(raw).hostname or "").lower()
+        return host not in {"127.0.0.1", "localhost", "::1"}
 
 
 @lru_cache
@@ -95,6 +115,7 @@ def get_settings() -> Settings:
             )
         ),
         integration_refresh_token=os.environ.get("WEBEX_INTEGRATION_REFRESH_TOKEN"),
+        integration_redirect_uri=os.environ.get("WEBEX_INTEGRATION_REDIRECT_URI"),
         rate_limit_per_minute=rate_limit,
         media_echo_enabled=_env_bool("WEBEX_MEDIA_ECHO_ENABLED", default=False),
         media_enabled=_env_bool("WEBEX_MEDIA_ENABLED", default=True),
