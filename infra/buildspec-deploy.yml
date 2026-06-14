@@ -1,0 +1,39 @@
+version: 0.2
+
+phases:
+  pre_build:
+    commands:
+      - echo "Deploy stage for ${STACK_NAME} in ${AWS_DEFAULT_REGION}"
+      - source infra/scripts/pipeline_common.sh
+      - resolve_cluster_service
+      - mkdir -p deploy-meta
+      - |
+        PREVIOUS="$(aws ecs describe-services \
+          --cluster "$ECS_CLUSTER" \
+          --services "$ECS_SERVICE" \
+          --region "$AWS_DEFAULT_REGION" \
+          --query 'services[0].taskDefinition' \
+          --output text)"
+        echo "previous_task_definition_arn=${PREVIOUS}" > deploy-meta/env
+        echo "Captured rollback target: ${PREVIOUS}"
+  build:
+    commands:
+      - source infra/scripts/pipeline_common.sh
+      - resolve_cluster_service
+      - |
+        echo "Forcing new deployment for ${ECS_CLUSTER}/${ECS_SERVICE}..."
+        aws ecs update-service \
+          --cluster "$ECS_CLUSTER" \
+          --service "$ECS_SERVICE" \
+          --force-new-deployment \
+          --region "$AWS_DEFAULT_REGION" >/dev/null
+        aws ecs wait services-stable \
+          --cluster "$ECS_CLUSTER" \
+          --services "$ECS_SERVICE" \
+          --region "$AWS_DEFAULT_REGION"
+        echo "ECS service stable."
+
+artifacts:
+  files:
+    - deploy-meta/**/*
+  name: DeployMeta

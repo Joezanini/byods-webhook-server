@@ -8,6 +8,7 @@ import os
 import aws_cdk as cdk
 
 from stack import ByodsWebhookStack
+from pipeline_stack import ByodsPipelineStack
 
 app = cdk.App()
 
@@ -25,6 +26,15 @@ ByodsWebhookStack(
     domain_name=domain_name,
     hooks_hostname=f"{hooks_subdomain}.{domain_name}",
     media_hostname=f"{media_subdomain}.{domain_name}",
+)
+
+ByodsPipelineStack(
+    app,
+    "ByodsPipelineStack",
+    env=cdk.Environment(
+        account=os.environ.get("CDK_DEFAULT_ACCOUNT"),
+        region=os.environ.get("CDK_DEFAULT_REGION", "us-east-1"),
+    ),
 )
 
 app.synth()

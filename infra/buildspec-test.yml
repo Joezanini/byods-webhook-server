@@ -1,0 +1,13 @@
+version: 0.2
+
+phases:
+  install:
+    commands:
+      - python3 -m pip install -q -r requirements.txt
+      - python3 -m pip install -q pytest pytest-asyncio httpx
+  build:
+    commands:
+      - echo "Running unit and non-live integration tests..."
+      - pytest tests/unit tests/integration -q --ignore=tests/integration/test_list_virtual_agents.py
+      - echo "Validating Dockerfile build (no push)..."
+      - docker build -t byods-webhook-server:pr-test .

@@ -17,6 +17,10 @@
     "domain": "atozbuildingcrm.com",
     "hooksSubdomain": "hooks",
     "mediaSubdomain": "media",
-    "desiredCount": 0
+    "desiredCount": 0,
+    "githubOwner": "Joezanini",
+    "githubRepo": "byods-webhook-server",
+    "githubBranch": "main",
+    "githubConnectionArn": ""
   }
 }
