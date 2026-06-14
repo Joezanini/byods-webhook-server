@@ -1,0 +1,113 @@
+openapi: 3.1.0
+info:
+  title: BYODS Webhook Server — Webhook & Health HTTP Surfaces
+  version: 1.0.0
+  description: |
+    Minimal HTTP endpoints required for Webex webhook delivery and deployment health probes.
+    BYODS CRUD is performed via the webex-byova SDK and CLI scripts — see sdk-operations.md.
+    BYOVA media is deferred until the SDK exposes media server APIs.
+
+servers:
+  - url: https://{host}
+    variables:
+      host:
+        default: localhost:8000
+
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Liveness probe
+      tags: [Operations]
+      security: []
+      responses:
+        "200":
+          description: Server is running
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /ready:
+    get:
+      operationId: getReady
+      summary: Readiness probe (Integration tokens available)
+      tags: [Operations]
+      security: []
+      responses:
+        "200":
+          description: Ready to process webhooks
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+        "503":
+          description: Integration credentials not bootstrapped
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /webhooks/webex:
+    post:
+      operationId: postWebexWebhook
+      summary: Receive serviceApp authorized/deauthorized webhooks
+      description: Processed by webex-byova SDK ahandle_service_app_webhook
+      tags: [Webhooks]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Raw Webex webhook payload (serviceApp resource)
+      responses:
+        "200":
+          description: Webhook processed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookAckResponse"
+        "400":
+          description: Invalid payload (SDK ValidationError)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Integration not authorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+
+    ErrorResponse:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: string
+
+    WebhookAckResponse:
+      type: object
+      required: [status, org_id, event]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        org_id:
+          type: string
+        event:
+          type: string
+          enum: [authorized, deauthorized]

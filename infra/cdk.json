@@ -1,0 +1,26 @@
+{
+  "app": "python3 app.py",
+  "watch": {
+    "include": ["**"],
+    "exclude": [
+      "README.md",
+      "cdk*.json",
+      "requirements*.txt",
+      "**/__pycache__",
+      "**/*.pyc",
+      "cdk.out"
+    ]
+  },
+  "context": {
+    "@aws-cdk/aws-ecs:arnFormatIncludesClusterName": true,
+    "@aws-cdk/aws-iam:minimizePolicies": true,
+    "domain": "atozbuildingcrm.com",
+    "hooksSubdomain": "hooks",
+    "mediaSubdomain": "media",
+    "desiredCount": 0,
+    "githubOwner": "Joezanini",
+    "githubRepo": "byods-webhook-server",
+    "githubBranch": "main",
+    "githubConnectionArn": ""
+  }
+}

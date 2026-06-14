@@ -1,0 +1,101 @@
+version: 0.2
+
+phases:
+  pre_build:
+    commands:
+      - source infra/scripts/pipeline_common.sh
+      - resolve_health_urls
+      - echo "Verify targets health=${HEALTH_URL} ready=${READY_URL} webhook=${WEBHOOK_URL}"
+  build:
+    commands:
+      - source infra/scripts/pipeline_common.sh
+      - resolve_health_urls
+      - |
+        set +e
+        HEALTH_STATUS="fail"
+        READINESS_STATUS="unknown"
+        WEBHOOK_STATUS="fail"
+        GRPC_STATUS="skipped"
+        OVERALL="pass"
+        BLOCKING_FAILED=0
+
+        if curl -fsS "$HEALTH_URL"; then
+          HEALTH_STATUS="pass"
+          echo "Health check passed"
+        else
+          HEALTH_STATUS="fail"
+          BLOCKING_FAILED=1
+          echo "Health check FAILED" >&2
+        fi
+
+        READY_CODE="$(curl -sS -o /dev/null -w '%{http_code}' "$READY_URL" || echo 0)"
+        if [ "$READY_CODE" = "200" ]; then
+          READINESS_STATUS="pass"
+        elif [ "$READY_CODE" = "503" ]; then
+          READINESS_STATUS="${READY_CODE}-warn"
+          echo "Readiness returned 503 (non-blocking)" >&2
+        else
+          READINESS_STATUS="${READY_CODE}-info"
+          echo "Readiness HTTP ${READY_CODE} (non-blocking)" >&2
+        fi
+
+        HOOK_CODE="$(curl -sS -o /dev/null -w '%{http_code}' \
+          -X POST "$WEBHOOK_URL" \
+          -H 'Content-Type: application/json' \
+          -d '{}' || echo 0)"
+        if [ "$HOOK_CODE" != "0" ] && [ -n "$HOOK_CODE" ]; then
+          WEBHOOK_STATUS="${HOOK_CODE}-pass"
+          echo "Webhook route responded HTTP ${HOOK_CODE}"
+        else
+          WEBHOOK_STATUS="fail"
+          BLOCKING_FAILED=1
+          echo "Webhook route FAILED" >&2
+        fi
+
+        if command -v grpcurl >/dev/null 2>&1; then
+          if grpcurl -max-time 15 \
+            -H 'trackingid: pipeline-verify' \
+            "${MEDIA_HOST}:443" \
+            com.cisco.wcc.ccai.media.v1.VoiceVirtualAgent/ListVirtualAgents >/dev/null 2>&1; then
+            GRPC_STATUS="pass"
+          else
+            GRPC_STATUS="warn-alb-health-known-issue"
+            echo "gRPC probe failed (non-blocking; see AWS_DEPLOYMENT.md)" >&2
+          fi
+        else
+          echo "grpcurl not installed; skipping gRPC probe"
+        fi
+
+        if [ "$BLOCKING_FAILED" -eq 1 ]; then
+          OVERALL="fail"
+          DEPLOY_META_DIR="${CODEBUILD_SRC_DIR_DeployMeta:-}"
+          if [ -n "$DEPLOY_META_DIR" ] && [ -f "$DEPLOY_META_DIR/deploy-meta/env" ]; then
+            # shellcheck disable=SC1090
+            source "$DEPLOY_META_DIR/deploy-meta/env"
+            if [ -n "${previous_task_definition_arn:-}" ]; then
+              source infra/scripts/pipeline_common.sh
+              resolve_cluster_service
+              echo "Rolling back to ${previous_task_definition_arn}..." >&2
+              aws ecs update-service \
+                --cluster "$ECS_CLUSTER" \
+                --service "$ECS_SERVICE" \
+                --task-definition "$previous_task_definition_arn" \
+                --force-new-deployment \
+                --region "$AWS_DEFAULT_REGION" >/dev/null
+              aws ecs wait services-stable \
+                --cluster "$ECS_CLUSTER" \
+                --services "$ECS_SERVICE" \
+                --region "$AWS_DEFAULT_REGION" || true
+            else
+              echo "warning: previous_task_definition_arn not found; cannot rollback" >&2
+            fi
+          else
+            echo "warning: DeployMeta artifact missing; cannot rollback" >&2
+          fi
+        fi
+
+        SUMMARY="{\"health\":\"${HEALTH_STATUS}\",\"readiness\":\"${READINESS_STATUS}\",\"webhook\":\"${WEBHOOK_STATUS}\",\"grpc\":\"${GRPC_STATUS}\",\"overall\":\"${OVERALL}\"}"
+        echo "$SUMMARY"
+        if [ "$BLOCKING_FAILED" -eq 1 ]; then
+          exit 1
+        fi

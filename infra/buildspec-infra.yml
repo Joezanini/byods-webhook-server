@@ -1,0 +1,30 @@
+version: 0.2
+
+phases:
+  pre_build:
+    commands:
+      - echo "Infra stage for ${STACK_NAME} (FORCE_INFRA=${FORCE_INFRA:-false})"
+      - |
+        if [ "${FORCE_INFRA:-false}" != "true" ]; then
+          if ! git diff-tree --no-commit-id --name-only -r "$CODEBUILD_RESOLVED_SOURCE_VERSION" | grep -q '^infra/'; then
+            echo "No infra/** changes in commit ${CODEBUILD_RESOLVED_SOURCE_VERSION}; skipping CDK deploy"
+            exit 0
+          fi
+          echo "infra/** changes detected; proceeding with CDK deploy"
+        else
+          echo "FORCE_INFRA=true; running CDK deploy without diff check"
+        fi
+  build:
+    commands:
+      - cd infra
+      - python3 -m venv .venv
+      - . .venv/bin/activate
+      - pip install -q -r requirements.txt
+      - |
+        if ! aws cloudformation describe-stacks --stack-name CDKToolkit --region "$AWS_DEFAULT_REGION" >/dev/null 2>&1; then
+          echo "Bootstrapping CDK..."
+          npx --yes aws-cdk@2.1126.0 bootstrap "aws://${AWS_ACCOUNT_ID}/${AWS_DEFAULT_REGION}"
+        fi
+      - export CDK_DEFAULT_ACCOUNT="$AWS_ACCOUNT_ID"
+      - export CDK_DEFAULT_REGION="$AWS_DEFAULT_REGION"
+      - npx --yes aws-cdk@2.1126.0 deploy "$STACK_NAME" --require-approval never -c "desiredCount=1"

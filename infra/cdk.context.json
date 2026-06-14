@@ -1,0 +1,14 @@
+{
+  "hosted-zone:account=782781396561:domainName=atozbuildingcrm.com:region=us-east-1": {
+    "Id": "/hostedzone/Z0497466CJV0GMO8ESPK",
+    "Name": "atozbuildingcrm.com."
+  },
+  "availability-zones:account=782781396561:region=us-east-1": [
+    "us-east-1a",
+    "us-east-1b",
+    "us-east-1c",
+    "us-east-1d",
+    "us-east-1e",
+    "us-east-1f"
+  ]
+}
