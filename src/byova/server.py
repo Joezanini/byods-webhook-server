@@ -2,19 +2,30 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from webex_byova.media import BYOVAMediaServer
 from webex_byova.media.config import MediaServerConfig
 
-from src.byova.catalog import VirtualAgentCatalogEntry, load_catalog
+from src.byova.catalog import VirtualAgentCatalogEntry
 from src.byova.sdk_patch import apply_sdk_catalog_patch, sdk_supports_native_catalog
 from src.config.settings import Settings
 
+if TYPE_CHECKING:
+    from src.persistence.catalog_repository import (
+        DynamoDBCatalogRepository,
+        InMemoryCatalogRepository,
+    )
 
-def create_media_server(settings: Settings) -> BYOVAMediaServer:
-    """Create a BYOVAMediaServer with virtual agent catalog from configuration."""
+
+async def create_media_server(
+    settings: Settings,
+    catalog_repository: "InMemoryCatalogRepository | DynamoDBCatalogRepository",
+) -> BYOVAMediaServer:
+    """Create a BYOVAMediaServer with virtual agent catalog from persistence."""
     apply_sdk_catalog_patch()
 
-    catalog: list[VirtualAgentCatalogEntry] = load_catalog(settings.virtual_agents_config_path)
+    catalog: list[VirtualAgentCatalogEntry] = await catalog_repository.list_agents()
     config = MediaServerConfig.from_env()
 
     if sdk_supports_native_catalog():
@@ -32,5 +43,12 @@ def create_media_server(settings: Settings) -> BYOVAMediaServer:
 
     server = BYOVAMediaServer(config)
     server._virtual_agent_catalog = catalog  # noqa: SLF001
-    server._virtual_agents_config_path = settings.virtual_agents_config_path  # noqa: SLF001
+    server._catalog_repository = catalog_repository  # noqa: SLF001
+
+    async def refresh_catalog() -> list[VirtualAgentCatalogEntry]:
+        entries = await catalog_repository.list_agents()
+        server._virtual_agent_catalog = entries  # noqa: SLF001
+        return entries
+
+    server._catalog_refresh = refresh_catalog  # noqa: SLF001
     return server

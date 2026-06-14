@@ -11,6 +11,7 @@ from aws_cdk import (
 from aws_cdk import aws_certificatemanager as acm
 from aws_cdk import aws_ec2 as ec2
 from aws_cdk import aws_ecr as ecr
+from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_ecs as ecs
 from aws_cdk import aws_elasticloadbalancingv2 as elbv2
 from aws_cdk import aws_iam as iam
@@ -83,6 +84,24 @@ class ByodsWebhookStack(Stack):
             "WebexSecret",
             secret_name="byods-webhook-server/webex",
             description="Webex Integration and Service App credentials for BYODS webhook server",
+        )
+
+        app_state_table = dynamodb.Table(
+            self,
+            "AppStateTable",
+            table_name="byods-app-state",
+            partition_key=dynamodb.Attribute(
+                name="PK",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            sort_key=dynamodb.Attribute(
+                name="SK",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            encryption=dynamodb.TableEncryption.AWS_MANAGED,
+            removal_policy=RemovalPolicy.RETAIN,
+            time_to_live_attribute="expires_at",
         )
 
         alb_security_group = ec2.SecurityGroup(
@@ -226,6 +245,7 @@ class ByodsWebhookStack(Stack):
             "TaskRole",
             assumed_by=iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
         )
+        app_state_table.grant_read_write_data(task_role)
 
         task_definition = ecs.FargateTaskDefinition(
             self,
@@ -254,6 +274,8 @@ class ByodsWebhookStack(Stack):
                 "WEBEX_MEDIA_PORT": "50051",
                 "WEBEX_MEDIA_VERIFY_TOKENS": "true",
                 "WEBEX_VIRTUAL_AGENTS_CONFIG": "config/virtual_agents.json",
+                "PERSISTENCE_BACKEND": "dynamodb",
+                "DYNAMODB_TABLE_NAME": app_state_table.table_name,
             },
             secrets={
                 "WEBEX_INTEGRATION_CLIENT_ID": ecs.Secret.from_secrets_manager(
@@ -270,6 +292,9 @@ class ByodsWebhookStack(Stack):
                 ),
                 "WEBEX_INTEGRATION_REFRESH_TOKEN": ecs.Secret.from_secrets_manager(
                     webex_secret, field="WEBEX_INTEGRATION_REFRESH_TOKEN"
+                ),
+                "PERSISTENCE_ENCRYPTION_KEY": ecs.Secret.from_secrets_manager(
+                    webex_secret, field="PERSISTENCE_ENCRYPTION_KEY"
                 ),
             },
             health_check=ecs.HealthCheck(
@@ -340,3 +365,5 @@ class ByodsWebhookStack(Stack):
         CfnOutput(self, "WebexSecretArn", value=webex_secret.secret_arn)
         CfnOutput(self, "EcsClusterName", value=cluster.cluster_name)
         CfnOutput(self, "EcsServiceName", value=service.service_name)
+        CfnOutput(self, "AppStateTableName", value=app_state_table.table_name)
+        CfnOutput(self, "AppStateTableArn", value=app_state_table.table_arn)

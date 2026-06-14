@@ -6,13 +6,14 @@ import logging
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
-from webex_byova import BYOVA
+from fastapi import FastAPI, HTTPException, Request
 from webex_byova.exceptions import AuthenticationError
 from src.common.logging import configure_logging
 from src.common.middleware import RequestIdMiddleware, WebhookRateLimitMiddleware
 from src.config.settings import get_settings
-from src.webhooks.routes import router as webhooks_router, set_sdk
+from src.persistence.client import check_table_reachable
+from src.persistence.factory import create_persistence_resources, create_sdk
+from src.webhooks.routes import router as webhooks_router, set_audit_repository, set_sdk
 
 load_dotenv()
 
@@ -24,7 +25,11 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     configure_logging(use_json=settings.log_json)
 
-    sdk = BYOVA.from_env()
+    persistence = await create_persistence_resources(settings)
+    app.state.persistence = persistence
+    set_audit_repository(persistence.audit_repository)
+
+    sdk = create_sdk(settings, persistence.token_storage)
     set_sdk(sdk)
     app.state.sdk = sdk
 
@@ -48,12 +53,29 @@ async def lifespan(app: FastAPI):
         )
         app.state.integration_ready = False
 
+    if settings.persistence_backend == "dynamodb":
+        app.state.persistence_ready = await check_table_reachable(
+            table_name=settings.dynamodb_table_name,
+            region=settings.aws_region,
+            endpoint_url=settings.aws_endpoint_url,
+        )
+        if not app.state.persistence_ready:
+            logger.error(
+                "DynamoDB table %s is not reachable",
+                settings.dynamodb_table_name,
+            )
+    else:
+        app.state.persistence_ready = True
+
     media_server = None
     if settings.media_enabled:
         from src.byova.lifecycle import start_media_server, stop_media_server
         from src.byova.server import create_media_server
 
-        media_server = create_media_server(settings)
+        await persistence.catalog_repository.ensure_seeded(
+            settings.virtual_agents_config_path
+        )
+        media_server = await create_media_server(settings, persistence.catalog_repository)
         await start_media_server(media_server, settings)
         app.state.media_server = media_server
 
@@ -64,6 +86,7 @@ async def lifespan(app: FastAPI):
 
         await stop_media_server(media_server)
     await sdk.aclose()
+    await persistence.aclose()
 
 
 def create_app() -> FastAPI:
@@ -89,11 +112,18 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
 
     @app.get("/ready")
-    async def ready() -> dict[str, str]:
-        if not getattr(app.state, "integration_ready", False):
+    async def ready(request: Request) -> dict[str, str]:
+        if not getattr(request.app.state, "integration_ready", False):
             raise HTTPException(
                 status_code=503,
                 detail="Integration credentials not bootstrapped",
+            )
+        if settings.persistence_backend == "dynamodb" and not getattr(
+            request.app.state, "persistence_ready", False
+        ):
+            raise HTTPException(
+                status_code=503,
+                detail="DynamoDB persistence backend unavailable",
             )
         return {"status": "ok"}
 

@@ -2,7 +2,7 @@
 
 This document describes the current AWS deployment for the BYODS webhook server and BYOVA gRPC media endpoint. It is intended for operators and for coding agents that will later wire up CI/CD.
 
-**Status:** Manual deploy via CDK + shell scripts. CI/CD pipeline is not implemented yet.
+**Status:** Manual deploy via CDK + shell scripts. **CI/CD pipelines** implemented in `ByodsPipelineStack` (see [CI/CD pipelines](#cicd-pipelines-codepipeline--codebuild) section).
 
 ## Public URLs (production)
 
@@ -64,6 +64,7 @@ ECS Fargate (1 task, public subnets, assignPublicIp=true)
 | ECS cluster / service | From CloudFormation outputs `EcsClusterName`, `EcsServiceName` |
 | ALB | Internet-facing, HTTPS listener on 443 |
 | Secrets Manager | `byods-webhook-server/webex` (JSON key/value) |
+| DynamoDB | `byods-app-state` (org credentials, catalog, audit; on-demand billing) |
 | CloudWatch Logs | `/ecs/byods-webhook-server` (7-day retention) |
 | ACM certificate | `atozbuildingcrm.com` + `*.atozbuildingcrm.com` (DNS validation) |
 
@@ -205,6 +206,17 @@ JSON object synced from `.env` by `deploy.sh secrets`:
 | `WEBEX_SA_CLIENT_ID` | Yes | Service App |
 | `WEBEX_SA_CLIENT_SECRET` | Yes | Service App |
 | `WEBEX_INTEGRATION_REFRESH_TOKEN` | Yes (after webhook registration) | Long-lived Integration token |
+| `PERSISTENCE_ENCRYPTION_KEY` | Yes (production persistence) | Fernet key for org token encryption at rest |
+
+Generate the encryption key locally:
+
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+Add the value to `.env` as `PERSISTENCE_ENCRYPTION_KEY=...` before running `./infra/scripts/deploy.sh secrets`.
+
+**Migration note:** Existing authorized orgs in memory before this deploy do not auto-migrate. After enabling DynamoDB persistence, customer orgs must re-authorize in Control Hub (or replay authorization webhooks) once.
 
 ### Plain ECS environment (set in CDK)
 
@@ -217,7 +229,9 @@ JSON object synced from `.env` by `deploy.sh secrets`:
 | `WEBEX_MEDIA_HOST` | `0.0.0.0` |
 | `WEBEX_MEDIA_PORT` | `50051` |
 | `WEBEX_MEDIA_VERIFY_TOKENS` | `true` |
-| `WEBEX_VIRTUAL_AGENTS_CONFIG` | `config/virtual_agents.json` |
+| `WEBEX_VIRTUAL_AGENTS_CONFIG` | `config/virtual_agents.json` (bootstrap seed only) |
+| `PERSISTENCE_BACKEND` | `dynamodb` |
+| `DYNAMODB_TABLE_NAME` | `byods-app-state` (CloudFormation output `AppStateTableName`) |
 | `PORT` | `8000` |
 | `LOG_JSON` | `true` |
 
@@ -286,39 +300,127 @@ Mitigations (choose one before production hardening):
 
 Track this when implementing CI/CD smoke tests against `media.atozbuildingcrm.com`.
 
-## CI/CD notes (for future agents)
+## CI/CD pipelines (CodePipeline + CodeBuild)
 
-Not implemented yet. Suggested pipeline stages based on current layout:
+**Status:** Implemented in `infra/pipeline_stack.py` (`ByodsPipelineStack`). Deploy after `ByodsWebhookStack` exists.
 
-| Stage | Action | Script / path |
-|-------|--------|----------------|
-| Build | Docker build + push to ECR | `infra/scripts/deploy.sh image` or CodeBuild [`codebuild_push.sh`](scripts/codebuild_push.sh) |
-| Deploy infra | CDK deploy (usually only on infra changes) | `infra/scripts/deploy.sh infra 1` |
-| Release | Force ECS rolling deploy of new image | `infra/scripts/deploy.sh restart` |
-| Secrets | Sync from CI secret store → Secrets Manager | `infra/scripts/deploy.sh secrets` (pattern only; CI should inject secrets, not use repo `.env`) |
-| Smoke test | HTTP health + optional gRPC | `infra/scripts/deploy.sh verify` |
+### Pipelines
 
-**Important for pipeline design:**
+| Pipeline | Trigger | Stages |
+|----------|---------|--------|
+| `byods-webhook-release` | Push to `main` | Source → Infra* → Build → Deploy → Verify |
+| `byods-webhook-pr-validation` | PR opened/updated | Source → Test |
 
-- First deploy must use two-phase flow (`desiredCount=0` → push image → `desiredCount=1`). Later releases only need `image` + `restart` unless CDK changes.
+\* Infra skips when no `infra/**` changes unless manual re-run sets `FORCE_INFRA=true`.
+
+**Concurrency (FR-016):** Release pipeline uses supersede mode — a new push cancels an in-flight run.
+
+### First-time pipeline setup
+
+1. Ensure `ByodsWebhookStack` is deployed (`./infra/scripts/deploy.sh all` if greenfield).
+2. Create/authorize GitHub CodeStar connection in AWS Console (Developer Tools → Connections), or pass existing ARN:
+
+   ```bash
+   cd infra
+   source .venv/bin/activate
+   export CDK_DEFAULT_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+   export CDK_DEFAULT_REGION=us-east-1
+   cdk deploy ByodsPipelineStack \
+     -c githubConnectionArn=arn:aws:codestar-connections:us-east-1:ACCOUNT:connection/UUID
+   ```
+
+3. If CDK creates a new connection, open AWS Console → Connections → **Update pending connection** → authorize GitHub org `Joezanini` / repo `byods-webhook-server`.
+
+   Current connection (pending until authorized):
+
+   ```text
+   arn:aws:codestar-connections:us-east-1:782781396561:connection/f55f72d1-76a0-4e3d-a66f-408a1aeac76d
+   ```
+
+4. (Recommended) Enable GitHub branch protection on `main` requiring the PR pipeline check `byods-webhook-pr-validation` (see GitHub → Settings → Branches).
+
+### Routine release (application change)
+
+Merge to `main` → release pipeline:
+
+1. **Infra** — skipped if commit has no `infra/**` changes
+2. **Build** — `infra/buildspec.yml` → ECR push (`:latest` + commit SHA)
+3. **Deploy** — `infra/buildspec-deploy.yml` → ECS force-new-deployment
+4. **Verify** — `infra/buildspec-verify.yml` → HTTP health + webhook checks; **auto-rollback** on blocking failure (FR-015)
+
+Manual fallback: `./infra/scripts/deploy.sh image && ./infra/scripts/deploy.sh restart`
+
+### Force infrastructure deploy
+
+Re-run `byods-webhook-release` from CodePipeline Console → **Release change** → set variable `FORCE_INFRA=true` (FR-008).
+
+### Pull-request validation
+
+Opening/updating a PR runs `byods-webhook-pr-validation`: `pytest` + `docker build` only (no ECR push, no ECS deploy).
+
+### Secrets policy
+
+- Pipeline IAM roles **deny** `secretsmanager:GetSecretValue` on `byods-webhook-server/webex`.
+- Webex credentials remain in Secrets Manager; ECS task loads them at runtime.
+- **Do not** use `deploy.sh secrets` from CI or commit `.env`.
+- Webhook OAuth (`register_webhooks.py`) stays a **one-time manual** step per environment.
+
+### Buildspec reference
+
+| File | Stage |
+|------|-------|
+| `infra/buildspec.yml` | Build (image push) |
+| `infra/buildspec-infra.yml` | Infra (conditional CDK) |
+| `infra/buildspec-deploy.yml` | Deploy (ECS rollout) |
+| `infra/buildspec-verify.yml` | Verify (smoke + rollback) |
+| `infra/buildspec-test.yml` | PR Test |
+
+### Troubleshooting
+
+| Issue | Action |
+|-------|--------|
+| Pipeline never triggers | Confirm CodeStar connection status is **Available** |
+| Infra stage failed, stack `UPDATE_ROLLBACK_COMPLETE` | `aws cloudformation delete-stack --stack-name ByodsWebhookStack --region us-east-1`, fix CDK, redeploy |
+| Verify fails but HTTP works | Check blocking vs non-blocking checks; gRPC is non-blocking in v1 |
+| Deploy fails mid-rollout | Production stays on last stable deployment (FR-017); fix and re-run pipeline |
+
+See `specs/004-aws-cicd-pipeline/quickstart.md` for validation scenarios.
+
+### Legacy manual stages (reference)
+
+| Stage | Manual equivalent |
+|-------|-------------------|
+| Build | `infra/scripts/deploy.sh image` |
+| Deploy | `infra/scripts/deploy.sh restart` |
+| Infra | `infra/scripts/deploy.sh infra 1` |
+| Verify | `infra/scripts/deploy.sh verify` |
+| Bootstrap | `infra/scripts/deploy.sh all` (one-time) |
+
+**Important:**
+
+- First environment bootstrap still uses two-phase flow via `deploy.sh all`.
 - Do not commit `.env` or refresh tokens to git.
-- Webhook registration (`register_webhooks.py`) is a **one-time manual/OAuth step** per environment; store resulting refresh token in Secrets Manager.
-- Stack deletion: `UPDATE_ROLLBACK_COMPLETE` stacks must be deleted before redeploy: `aws cloudformation delete-stack --stack-name ByodsWebhookStack --region us-east-1`.
-- Estimated dev cost: ~$30–35/month (single Fargate task, ALB, no NAT gateway).
+- Estimated pipeline overhead ~$1–5/month atop ~$30–35/month ECS/ALB footprint.
 
 ## File reference
 
 ```text
 infra/
 ├── AWS_DEPLOYMENT.md      # This file
-├── app.py                 # CDK entrypoint
+├── app.py                 # CDK entrypoint (ByodsWebhookStack + ByodsPipelineStack)
 ├── stack.py               # ALB + ECS + Route53 + ACM + ECR + secrets
-├── cdk.json               # Domain context defaults
+├── pipeline_stack.py      # CodePipeline + CodeBuild CI/CD
+├── cdk.json               # Domain + GitHub context defaults
 ├── requirements.txt       # aws-cdk-lib
-├── buildspec.yml          # CodeBuild image build
+├── buildspec.yml          # Release: image build
+├── buildspec-infra.yml    # Release: conditional CDK deploy
+├── buildspec-deploy.yml   # Release: ECS rollout
+├── buildspec-verify.yml   # Release: smoke tests + rollback
+├── buildspec-test.yml     # PR: pytest + docker build
 └── scripts/
-    ├── deploy.sh          # Main operator script
-    └── codebuild_push.sh  # Remote image build when Docker unavailable
+    ├── deploy.sh          # Manual operator script (fallback)
+    ├── codebuild_push.sh  # Legacy remote build (superseded by pipeline)
+    └── pipeline_common.sh # Shared CodeBuild helpers
 ```
 
 ## Quick reference card

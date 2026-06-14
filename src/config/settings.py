@@ -41,6 +41,12 @@ class Settings:
     media_enabled: bool
     log_json: bool
     virtual_agents_config_path: str
+    persistence_backend: str
+    dynamodb_table_name: str
+    persistence_encryption_key: str | None
+    persistence_audit_ttl_days: int
+    aws_region: str
+    aws_endpoint_url: str | None
 
     def build_datasource_url(self) -> str | None:
         """Derive BYODS ingestion URL from public URL or webhook target origin."""
@@ -96,4 +102,10 @@ def get_settings() -> Settings:
         virtual_agents_config_path=os.environ.get(
             "WEBEX_VIRTUAL_AGENTS_CONFIG", "config/virtual_agents.json"
         ),
+        persistence_backend=os.environ.get("PERSISTENCE_BACKEND", "memory").strip().lower(),
+        dynamodb_table_name=os.environ.get("DYNAMODB_TABLE_NAME", "byods-app-state"),
+        persistence_encryption_key=os.environ.get("PERSISTENCE_ENCRYPTION_KEY") or None,
+        persistence_audit_ttl_days=int(os.environ.get("PERSISTENCE_AUDIT_TTL_DAYS", "30")),
+        aws_region=os.environ.get("AWS_REGION", "us-east-1"),
+        aws_endpoint_url=os.environ.get("AWS_ENDPOINT_URL") or None,
     )

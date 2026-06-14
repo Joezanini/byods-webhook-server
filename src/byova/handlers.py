@@ -29,7 +29,6 @@ logger = logging.getLogger("byods-webhook-server.media")
 
 def register_handlers(server: "BYOVAMediaServer", settings: Settings) -> None:
     """Register structured logging and optional echo handlers on the media server."""
-    catalog_ids = catalog_id_set(getattr(server, "_virtual_agent_catalog", []))
 
     @server.on("list_virtual_agents")
     async def on_list_virtual_agents(event: ListVirtualAgentsEvent) -> None:
@@ -52,6 +51,8 @@ def register_handlers(server: "BYOVAMediaServer", settings: Settings) -> None:
 
     @server.on("session_start")
     async def on_session_start(event: SessionStartEvent, session: "MediaSession") -> None:
+        catalog = getattr(server, "_virtual_agent_catalog", [])
+        catalog_ids = catalog_id_set(catalog)
         virtual_agent_id = event.metadata.get("virtual_agent_id")
         customer_org_id = event.metadata.get("customer_org_id")
         virtual_agent_id_str = str(virtual_agent_id) if virtual_agent_id else None

@@ -20,6 +20,62 @@ class VirtualAgentCatalogEntry:
     is_default: bool = False
 
 
+
+def validate_catalog_entries(entries: list[VirtualAgentCatalogEntry]) -> None:
+    """Validate aggregate catalog rules (≥1 agent, unique ids, ≤1 default)."""
+    if not entries:
+        raise CatalogLoadError(
+            "Catalog is empty. At least one virtual agent is required."
+        )
+
+    seen_ids: set[str] = set()
+    default_count = 0
+    for entry in entries:
+        if not entry.virtual_agent_id.strip():
+            raise CatalogLoadError("virtual_agent_id must be non-empty.")
+        if not entry.virtual_agent_name.strip():
+            raise CatalogLoadError(
+                f"virtual_agent_id '{entry.virtual_agent_id}' has an empty virtual_agent_name."
+            )
+        if entry.virtual_agent_id in seen_ids:
+            raise CatalogLoadError(
+                f"Duplicate virtual_agent_id '{entry.virtual_agent_id}' in catalog."
+            )
+        seen_ids.add(entry.virtual_agent_id)
+        if entry.is_default:
+            default_count += 1
+
+    if default_count > 1:
+        raise CatalogLoadError(
+            "Catalog marks more than one agent as is_default=true. "
+            "At most one default agent is allowed."
+        )
+
+
+def _parse_catalog_item(item: dict, *, source: str) -> VirtualAgentCatalogEntry:
+    agent_id_raw = item.get("virtual_agent_id")
+    agent_name = item.get("virtual_agent_name")
+    is_default = bool(item.get("is_default", False))
+
+    if agent_id_raw is None:
+        raise CatalogLoadError(f"Catalog entry in {source} is missing virtual_agent_id.")
+
+    agent_id = str(agent_id_raw).strip()
+    if not agent_id:
+        raise CatalogLoadError(f"Catalog entry in {source} has an empty virtual_agent_id.")
+
+    if not isinstance(agent_name, str) or not agent_name.strip():
+        raise CatalogLoadError(
+            f"Catalog entry '{agent_id}' in {source} has an empty virtual_agent_name."
+        )
+
+    return VirtualAgentCatalogEntry(
+        virtual_agent_id=agent_id,
+        virtual_agent_name=agent_name.strip(),
+        is_default=is_default,
+    )
+
+
 def load_catalog(path: str | Path) -> list[VirtualAgentCatalogEntry]:
     """Load, validate, and return catalog entries from a JSON file."""
     catalog_path = Path(path)
@@ -39,64 +95,17 @@ def load_catalog(path: str | Path) -> list[VirtualAgentCatalogEntry]:
             f"Catalog file {catalog_path} must contain a JSON array of agent objects."
         )
 
-    if not raw:
+    entries = [
+        _parse_catalog_item(item, source=str(catalog_path))
+        for item in raw
+        if isinstance(item, dict)
+    ]
+    if len(entries) != len(raw):
         raise CatalogLoadError(
-            f"Catalog file {catalog_path} is empty. At least one virtual agent is required."
+            f"Catalog file {catalog_path} contains invalid entry types."
         )
 
-    entries: list[VirtualAgentCatalogEntry] = []
-    seen_ids: set[str] = set()
-    default_count = 0
-
-    for index, item in enumerate(raw):
-        if not isinstance(item, dict):
-            raise CatalogLoadError(
-                f"Catalog entry at index {index} in {catalog_path} must be a JSON object."
-            )
-
-        agent_id_raw = item.get("virtual_agent_id")
-        agent_name = item.get("virtual_agent_name")
-        is_default = bool(item.get("is_default", False))
-
-        if agent_id_raw is None:
-            raise CatalogLoadError(
-                f"Catalog entry at index {index} in {catalog_path} is missing virtual_agent_id."
-            )
-
-        agent_id = str(agent_id_raw).strip()
-        if not agent_id:
-            raise CatalogLoadError(
-                f"Catalog entry at index {index} in {catalog_path} has an empty virtual_agent_id."
-            )
-
-        if not isinstance(agent_name, str) or not agent_name.strip():
-            raise CatalogLoadError(
-                f"Catalog entry at index {index} in {catalog_path} has an empty virtual_agent_name."
-            )
-
-        if agent_id in seen_ids:
-            raise CatalogLoadError(
-                f"Duplicate virtual_agent_id '{agent_id}' in catalog file {catalog_path}."
-            )
-
-        seen_ids.add(agent_id)
-        if is_default:
-            default_count += 1
-
-        entries.append(
-            VirtualAgentCatalogEntry(
-                virtual_agent_id=agent_id,
-                virtual_agent_name=agent_name.strip(),
-                is_default=is_default,
-            )
-        )
-
-    if default_count > 1:
-        raise CatalogLoadError(
-            f"Catalog file {catalog_path} marks more than one agent as is_default=true. "
-            "At most one default agent is allowed."
-        )
-
+    validate_catalog_entries(entries)
     return entries
 
 

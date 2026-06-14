@@ -10,6 +10,7 @@ from webex_byova.media._internal.generated import byova_common_pb2, voicevirtual
 from src.byova.lifecycle import start_media_server, stop_media_server
 from src.byova.server import create_media_server
 from src.config.settings import Settings
+from src.persistence.catalog_repository import create_catalog_repository
 
 
 def _test_settings() -> Settings:
@@ -29,6 +30,12 @@ def _test_settings() -> Settings:
         media_enabled=True,
         log_json=True,
         virtual_agents_config_path="config/virtual_agents.json",
+        persistence_backend="memory",
+        dynamodb_table_name="byods-app-state",
+        persistence_encryption_key=None,
+        persistence_audit_ttl_days=30,
+        aws_region="us-east-1",
+        aws_endpoint_url=None,
     )
 
 
@@ -40,7 +47,8 @@ async def test_list_virtual_agents_returns_six_agents(monkeypatch):
     monkeypatch.setenv("WEBEX_VIRTUAL_AGENTS_CONFIG", "config/virtual_agents.json")
 
     settings = _test_settings()
-    server = create_media_server(settings)
+    catalog_repo = create_catalog_repository(settings)
+    server = await create_media_server(settings, catalog_repo)
     await start_media_server(server, settings)
     port = server.config.port
 

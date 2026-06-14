@@ -51,6 +51,12 @@ def _settings() -> Settings:
         media_enabled=True,
         log_json=True,
         virtual_agents_config_path="config/virtual_agents.json",
+        persistence_backend="memory",
+        dynamodb_table_name="byods-app-state",
+        persistence_encryption_key=None,
+        persistence_audit_ttl_days=30,
+        aws_region="us-east-1",
+        aws_endpoint_url=None,
     )
 
 

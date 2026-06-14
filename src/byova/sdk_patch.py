@@ -94,9 +94,11 @@ class CatalogVoiceVirtualAgentService(VoiceVirtualAgentService):
         if self._config.verify_tokens:
             await self._verify_context(context)
 
-        catalog: list[VirtualAgentCatalogEntry] = getattr(
-            self._server, "_virtual_agent_catalog", []
-        )
+        refresh = getattr(self._server, "_catalog_refresh", None)
+        if refresh is not None:
+            catalog: list[VirtualAgentCatalogEntry] = await refresh()
+        else:
+            catalog = getattr(self._server, "_virtual_agent_catalog", [])
         response = byova_common_pb2.ListVAResponse()
         agent_names: list[str] = []
 

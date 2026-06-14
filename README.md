@@ -7,10 +7,10 @@
 - `POST /webhooks/webex` — serviceApp `authorized` / `deauthorized` webhooks via SDK
 - `GET /health` / `GET /ready` — deployment probes
 - **gRPC media** on `WEBEX_MEDIA_PORT` (default `50051`) via SDK `BYOVAMediaServer`
-- **Virtual agent catalog** for Flow Designer via gRPC `ListVirtualAgents` (configurable JSON file)
+- **Virtual agent catalog** for Flow Designer via gRPC `ListVirtualAgents` (DynamoDB-backed when `PERSISTENCE_BACKEND=dynamodb`)
 - **BYODS CRUD** via CLI script (`scripts/manage_datasources.py`) — no REST API
 
-On **authorized**, the SDK stores org-scoped Service App tokens (in memory). When `WEBEX_AUTO_REGISTER_DATASOURCE=true`, a BYODS data source is registered automatically. On **deauthorized**, tokens are removed.
+On **authorized**, the SDK stores org-scoped Service App tokens in **DynamoDB** (encrypted) when persistence is enabled. When `WEBEX_AUTO_REGISTER_DATASOURCE=true`, a BYODS data source is registered automatically. On **deauthorized**, tokens are removed.
 
 ## Prerequisites
 
@@ -43,6 +43,48 @@ With media enabled (default), gRPC listens on `WEBEX_MEDIA_PORT` (50051). Verify
 grpcurl -plaintext localhost:50051 list
 ```
 
+## Persistent application state (DynamoDB)
+
+Org authorization credentials and the virtual agent catalog survive restarts and multi-instance deployments when `PERSISTENCE_BACKEND=dynamodb` (default in `.env.example`).
+
+```bash
+# Generate a Fernet encryption key for org token blobs at rest
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+
+# Add to .env:
+# PERSISTENCE_ENCRYPTION_KEY=<generated-key>
+# DYNAMODB_TABLE_NAME=byods-app-state
+# AWS_ENDPOINT_URL=http://localhost:8001   # DynamoDB Local only
+```
+
+**Local DynamoDB** (optional, via Docker Compose):
+
+```bash
+docker compose up -d dynamodb-local
+aws dynamodb create-table --endpoint-url http://localhost:8001 \
+  --table-name byods-app-state \
+  --attribute-definitions AttributeName=PK,AttributeType=S AttributeName=SK,AttributeType=S \
+  --key-schema AttributeName=PK,KeyType=HASH AttributeName=SK,KeyType=RANGE \
+  --billing-mode PAY_PER_REQUEST --region us-east-1
+```
+
+**Catalog management** (no file edit + restart required when using DynamoDB):
+
+```bash
+python scripts/manage_virtual_agents.py list
+python scripts/manage_virtual_agents.py update --id 1 --name "Updated Travel Agent"
+```
+
+**Audit trail** (optional):
+
+```bash
+python scripts/audit_webhooks.py list --org-id "$ORG_ID" --limit 10
+```
+
+Set `PERSISTENCE_BACKEND=memory` for local dev without DynamoDB (catalog reads from `config/virtual_agents.json` as before).
+
+See `specs/005-persistent-app-state/quickstart.md` for full validation scenarios.
+
 ## Virtual agent catalog (Flow Designer)
 
 Webex Contact Center Flow Designer discovers available virtual agents by calling `ListVirtualAgents` on your BYOVA gRPC endpoint. Configure the catalog in `config/virtual_agents.json` (six Cisco demo agents ship by default).
@@ -67,7 +109,7 @@ When Flow Designer (or grpcurl) requests the agent list, the server logs at **IN
 Flow Designer requested virtual agent list — org=n/a agents=6 tracking_id=local-test
 ```
 
-Edit `config/virtual_agents.json` to add, rename, or remove agents, then restart the server. Invalid catalogs (duplicate IDs, multiple defaults, empty list) fail at startup with a clear error.
+Edit the catalog via `scripts/manage_virtual_agents.py` (DynamoDB) or `config/virtual_agents.json` when `PERSISTENCE_BACKEND=memory`. Invalid catalogs (duplicate IDs, multiple defaults, empty list) are rejected with a clear error.
 
 Requires `WEBEX_MEDIA_ENABLED=true` and a registered BYODS data source pointing at the gRPC endpoint.
 
