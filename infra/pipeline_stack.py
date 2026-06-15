@@ -153,6 +153,7 @@ class ByodsPipelineStack(Stack):
             "InfraProject",
             project_name="byods-webhook-infra",
             role=infra_role,
+            timeout=Duration.minutes(120),
             environment=codebuild.BuildEnvironment(
                 build_image=build_image,
                 compute_type=codebuild.ComputeType.SMALL,

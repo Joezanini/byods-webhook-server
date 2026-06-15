@@ -116,16 +116,18 @@ upload_secrets() {
     WEBEX_INTEGRATION_CLIENT_SECRET \
     WEBEX_SA_CLIENT_ID \
     WEBEX_SA_CLIENT_SECRET \
-    WEBEX_INTEGRATION_REFRESH_TOKEN; do
+    WEBEX_INTEGRATION_REFRESH_TOKEN \
+    PERSISTENCE_ENCRYPTION_KEY; do
     if [[ -z "${!key:-}" ]]; then
       echo "warning: ${key} is empty in .env" >&2
     fi
   done
 
   local payload
-  payload="$(python3 - <<'PY'
+  payload="$(python3 - <<PY
 import json
 import os
+import subprocess
 
 keys = [
     "WEBEX_INTEGRATION_CLIENT_ID",
@@ -133,8 +135,36 @@ keys = [
     "WEBEX_SA_CLIENT_ID",
     "WEBEX_SA_CLIENT_SECRET",
     "WEBEX_INTEGRATION_REFRESH_TOKEN",
+    "PERSISTENCE_ENCRYPTION_KEY",
 ]
-print(json.dumps({k: os.environ.get(k, "") for k in keys}))
+secret_name = "${SECRET_NAME}"
+region = "${AWS_REGION}"
+existing = {}
+try:
+    raw = subprocess.check_output(
+        [
+            "aws", "secretsmanager", "get-secret-value",
+            "--secret-id", secret_name,
+            "--region", region,
+            "--query", "SecretString",
+            "--output", "text",
+        ],
+        text=True,
+    )
+    existing = json.loads(raw)
+except subprocess.CalledProcessError:
+    pass
+
+merged = {}
+for key in keys:
+    value = os.environ.get(key, "")
+    if value:
+        merged[key] = value
+    elif key in existing:
+        merged[key] = existing[key]
+    else:
+        merged[key] = ""
+print(json.dumps(merged))
 PY
 )"
 

@@ -86,23 +86,31 @@ class ByodsWebhookStack(Stack):
             description="Webex Integration and Service App credentials for BYODS webhook server",
         )
 
-        app_state_table = dynamodb.Table(
-            self,
-            "AppStateTable",
-            table_name="byods-app-state",
-            partition_key=dynamodb.Attribute(
-                name="PK",
-                type=dynamodb.AttributeType.STRING,
-            ),
-            sort_key=dynamodb.Attribute(
-                name="SK",
-                type=dynamodb.AttributeType.STRING,
-            ),
-            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
-            encryption=dynamodb.TableEncryption.AWS_MANAGED,
-            removal_policy=RemovalPolicy.RETAIN,
-            time_to_live_attribute="expires_at",
-        )
+        app_state_table_name = "byods-app-state"
+        if self.node.try_get_context("importAppStateTable"):
+            app_state_table = dynamodb.Table.from_table_name(
+                self,
+                "AppStateTable",
+                app_state_table_name,
+            )
+        else:
+            app_state_table = dynamodb.Table(
+                self,
+                "AppStateTable",
+                table_name=app_state_table_name,
+                partition_key=dynamodb.Attribute(
+                    name="PK",
+                    type=dynamodb.AttributeType.STRING,
+                ),
+                sort_key=dynamodb.Attribute(
+                    name="SK",
+                    type=dynamodb.AttributeType.STRING,
+                ),
+                billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+                encryption=dynamodb.TableEncryption.AWS_MANAGED,
+                removal_policy=RemovalPolicy.RETAIN,
+                time_to_live_attribute="expires_at",
+            )
 
         alb_security_group = ec2.SecurityGroup(
             self,

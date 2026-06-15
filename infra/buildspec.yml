@@ -17,3 +17,8 @@ phases:
       - echo "Pushing image..."
       - docker push "$REPOSITORY_URI:$IMAGE_TAG"
       - docker push "$REPOSITORY_URI:latest"
+      - |
+        #region agent log
+        source infra/scripts/pipeline_debug_log.sh
+        pipeline_debug_log "C" "buildspec.yml:post-build" "Image pushed to ECR" "{\"repository\":\"$REPOSITORY_URI\",\"tags\":[\"$IMAGE_TAG\",\"latest\"],\"commit\":\"${CODEBUILD_RESOLVED_SOURCE_VERSION:-unknown}\"}"
+        #endregion
