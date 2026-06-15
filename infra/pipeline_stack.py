@@ -93,9 +93,6 @@ class ByodsPipelineStack(Stack):
             environment=build_environment,
             environment_variables={
                 **common_env,
-                "IMAGE_TAG": codebuild.BuildEnvironmentVariable(
-                    value="#{CODEBUILD_RESOLVED_SOURCE_VERSION}"
-                ),
             },
             build_spec=codebuild.BuildSpec.from_source_filename("infra/buildspec.yml"),
             logging=codebuild.LoggingOptions(
