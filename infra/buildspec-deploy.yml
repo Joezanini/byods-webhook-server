@@ -24,12 +24,6 @@ phases:
         source infra/scripts/pipeline_common.sh
         resolve_cluster_service
 
-        #region agent log
-        BEFORE="$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region "$AWS_DEFAULT_REGION" --query 'services[0].{desired:desiredCount,running:runningCount,taskDef:taskDefinition}' --output json)"
-        pipeline_debug_log "B" "buildspec-deploy.yml:pre-deploy" "ECS state before deploy" \
-          "ecs=$BEFORE"
-        #endregion
-
         echo "Forcing new deployment for ${ECS_CLUSTER}/${ECS_SERVICE}..."
         aws ecs update-service \
           --cluster "$ECS_CLUSTER" \
@@ -37,24 +31,10 @@ phases:
           --desired-count 1 \
           --force-new-deployment \
           --region "$AWS_DEFAULT_REGION" >/dev/null
-        if ! aws ecs wait services-stable \
+        aws ecs wait services-stable \
           --cluster "$ECS_CLUSTER" \
           --services "$ECS_SERVICE" \
-          --region "$AWS_DEFAULT_REGION"; then
-          #region agent log
-          FAILED="$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region "$AWS_DEFAULT_REGION" --query 'services[0].{desired:desiredCount,running:runningCount,pending:pendingCount,events:events[:3]}' --output json)"
-          pipeline_debug_log "O" "buildspec-deploy.yml:wait-failed" "ECS services-stable waiter failed" \
-            "ecs=$FAILED"
-          #endregion
-          exit 255
-        fi
-
-        #region agent log
-        AFTER="$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region "$AWS_DEFAULT_REGION" --query 'services[0].{desired:desiredCount,running:runningCount,taskDef:taskDefinition}' --output json)"
-        pipeline_debug_log "B" "buildspec-deploy.yml:post-deploy" "ECS state after deploy" \
-          "ecs=$AFTER"
-        #endregion
-
+          --region "$AWS_DEFAULT_REGION"
         echo "ECS service stable."
 
 artifacts:

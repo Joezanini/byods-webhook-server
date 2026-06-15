@@ -18,6 +18,7 @@ from aws_cdk import aws_iam as iam
 from aws_cdk import aws_logs as logs
 from aws_cdk import aws_route53 as route53
 from aws_cdk import aws_route53_targets as route53_targets
+from aws_cdk import aws_s3 as s3
 from aws_cdk import aws_secretsmanager as secretsmanager
 from constructs import Construct
 
@@ -143,6 +144,22 @@ class ByodsWebhookStack(Stack):
             "gRPC from ALB",
         )
 
+        alb_access_log_bucket = s3.Bucket(
+            self,
+            "AlbAccessLogs",
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            encryption=s3.BucketEncryption.S3_MANAGED,
+            enforce_ssl=True,
+            lifecycle_rules=[
+                s3.LifecycleRule(
+                    id="ExpireAlbAccessLogs",
+                    expiration=Duration.days(30),
+                ),
+            ],
+            removal_policy=RemovalPolicy.DESTROY,
+            auto_delete_objects=True,
+        )
+
         alb = elbv2.ApplicationLoadBalancer(
             self,
             "Alb",
@@ -151,6 +168,7 @@ class ByodsWebhookStack(Stack):
             security_group=alb_security_group,
             vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
         )
+        alb.log_access_logs(alb_access_log_bucket, prefix="alb")
 
         http_target_group = elbv2.ApplicationTargetGroup(
             self,
@@ -367,6 +385,7 @@ class ByodsWebhookStack(Stack):
 
         CfnOutput(self, "EcrRepositoryUri", value=repository.repository_uri)
         CfnOutput(self, "AlbDnsName", value=alb.load_balancer_dns_name)
+        CfnOutput(self, "AlbAccessLogsBucketName", value=alb_access_log_bucket.bucket_name)
         CfnOutput(self, "HooksUrl", value=f"https://{hooks_hostname}/webhooks/webex")
         CfnOutput(self, "MediaGrpcUrl", value=f"https://{media_hostname}/grpc")
         CfnOutput(self, "HealthUrl", value=f"https://{hooks_hostname}/health")
