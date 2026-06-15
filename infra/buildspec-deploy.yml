@@ -3,11 +3,12 @@ version: 0.2
 phases:
   pre_build:
     commands:
-      - echo "Deploy stage for ${STACK_NAME} in ${AWS_DEFAULT_REGION}"
-      - source infra/scripts/pipeline_common.sh
-      - resolve_cluster_service
-      - mkdir -p deploy-meta
       - |
+        set -euo pipefail
+        echo "Deploy stage for ${STACK_NAME} in ${AWS_DEFAULT_REGION}"
+        source infra/scripts/pipeline_common.sh
+        resolve_cluster_service
+        mkdir -p deploy-meta
         PREVIOUS="$(aws ecs describe-services \
           --cluster "$ECS_CLUSTER" \
           --services "$ECS_SERVICE" \
@@ -18,14 +19,16 @@ phases:
         echo "Captured rollback target: ${PREVIOUS}"
   build:
     commands:
-      - source infra/scripts/pipeline_common.sh
-      - source infra/scripts/pipeline_debug_log.sh
-      - resolve_cluster_service
       - |
+        set -euo pipefail
+        source infra/scripts/pipeline_common.sh
+        resolve_cluster_service
+
         #region agent log
         BEFORE="$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region "$AWS_DEFAULT_REGION" --query 'services[0].{desired:desiredCount,running:runningCount,taskDef:taskDefinition}' --output json)"
         pipeline_debug_log "B" "buildspec-deploy.yml:pre-deploy" "ECS state before deploy" "{\"ecs\":$BEFORE}"
         #endregion
+
         echo "Forcing new deployment for ${ECS_CLUSTER}/${ECS_SERVICE}..."
         aws ecs update-service \
           --cluster "$ECS_CLUSTER" \
@@ -37,10 +40,12 @@ phases:
           --cluster "$ECS_CLUSTER" \
           --services "$ECS_SERVICE" \
           --region "$AWS_DEFAULT_REGION"
+
         #region agent log
         AFTER="$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region "$AWS_DEFAULT_REGION" --query 'services[0].{desired:desiredCount,running:runningCount,taskDef:taskDefinition}' --output json)"
         pipeline_debug_log "B" "buildspec-deploy.yml:post-deploy" "ECS state after deploy" "{\"ecs\":$AFTER}"
         #endregion
+
         echo "ECS service stable."
 
 artifacts:

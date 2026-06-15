@@ -5,48 +5,76 @@ phases:
     commands:
       - echo "Infra stage for ${STACK_NAME} (FORCE_INFRA=${FORCE_INFRA:-false})"
       - |
-        if [ "${FORCE_INFRA:-false}" != "true" ]; then
-          if ! git diff-tree --no-commit-id --name-only -r "$CODEBUILD_RESOLVED_SOURCE_VERSION" | grep -q '^infra/'; then
-            echo "No infra/** changes in commit ${CODEBUILD_RESOLVED_SOURCE_VERSION}; skipping CDK deploy"
-            exit 0
-          fi
-          echo "infra/** changes detected; proceeding with CDK deploy"
-        else
+        set -euo pipefail
+        FORCE_INFRA="${FORCE_INFRA:-false}"
+        RUN_CDK=true
+
+        if [ "$FORCE_INFRA" = "true" ]; then
           echo "FORCE_INFRA=true; running CDK deploy without diff check"
+        elif git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+          if git diff-tree --no-commit-id --name-only -r "$CODEBUILD_RESOLVED_SOURCE_VERSION" 2>/dev/null | grep -q '^infra/'; then
+            echo "infra/** changes detected; proceeding with CDK deploy"
+          else
+            echo "No infra/** changes in commit ${CODEBUILD_RESOLVED_SOURCE_VERSION}; skipping CDK deploy"
+            RUN_CDK=false
+          fi
+        else
+          echo "Git metadata unavailable in CodeBuild; proceeding with CDK deploy (desiredCount=0)"
+        fi
+
+        if [ "$RUN_CDK" = "false" ]; then
+          touch .skip-infra-cdk-deploy
+        else
+          rm -f .skip-infra-cdk-deploy
         fi
   build:
     commands:
-      - source infra/scripts/pipeline_debug_log.sh
       - |
+        set -euo pipefail
+        if [ -f .skip-infra-cdk-deploy ]; then
+          echo "CDK deploy skipped for this commit"
+          exit 0
+        fi
+
+        source infra/scripts/pipeline_common.sh
+
         #region agent log
-        ECS_STATE="$(aws ecs describe-services --cluster "$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_DEFAULT_REGION" --query "Stacks[0].Outputs[?OutputKey=='EcsClusterName'].OutputValue" --output text 2>/dev/null || echo unknown)" --services "$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_DEFAULT_REGION" --query "Stacks[0].Outputs[?OutputKey=='EcsServiceName'].OutputValue" --output text 2>/dev/null || echo unknown)" --region "$AWS_DEFAULT_REGION" --query 'services[0].{desired:desiredCount,running:runningCount,taskDef:taskDefinition}' --output json 2>/dev/null || echo '{}')"
+        ECS_STATE="$(aws ecs describe-services \
+          --cluster "$(resolve_stack_output EcsClusterName)" \
+          --services "$(resolve_stack_output EcsServiceName)" \
+          --region "$AWS_DEFAULT_REGION" \
+          --query 'services[0].{desired:desiredCount,running:runningCount,taskDef:taskDefinition}' \
+          --output json 2>/dev/null || echo '{}')"
         pipeline_debug_log "B" "buildspec-infra.yml:pre-cdk" "ECS state before infra CDK deploy" "{\"ecs\":$ECS_STATE,\"commit\":\"${CODEBUILD_RESOLVED_SOURCE_VERSION:-unknown}\"}"
         #endregion
-      - cd infra
-      - python3 -m venv .venv
-      - . .venv/bin/activate
-      - pip install -q -r requirements.txt
-      - |
+
+        cd infra
+        python3 -m venv .venv
+        # shellcheck disable=SC1091
+        source .venv/bin/activate
+        pip install -q -r requirements.txt
+
         if ! aws cloudformation describe-stacks --stack-name CDKToolkit --region "$AWS_DEFAULT_REGION" >/dev/null 2>&1; then
           echo "Bootstrapping CDK..."
           npx --yes aws-cdk@2.1126.0 bootstrap "aws://${AWS_ACCOUNT_ID}/${AWS_DEFAULT_REGION}"
         fi
-      - export CDK_DEFAULT_ACCOUNT="$AWS_ACCOUNT_ID"
-      - export CDK_DEFAULT_REGION="$AWS_DEFAULT_REGION"
-      - |
+
+        export CDK_DEFAULT_ACCOUNT="$AWS_ACCOUNT_ID"
+        export CDK_DEFAULT_REGION="$AWS_DEFAULT_REGION"
+
         CDK_CONTEXT_ARGS=(-c "desiredCount=0")
         if aws dynamodb describe-table --table-name byods-app-state --region "$AWS_DEFAULT_REGION" >/dev/null 2>&1; then
           echo "Existing DynamoDB table byods-app-state detected; importing reference"
           CDK_CONTEXT_ARGS+=(-c "importAppStateTable=true")
         fi
+
         #region agent log
-        source scripts/pipeline_debug_log.sh
         pipeline_debug_log "E" "buildspec-infra.yml:cdk-deploy" "Starting CDK deploy" "{\"desiredCount\":0,\"cdkContext\":\"${CDK_CONTEXT_ARGS[*]}\",\"stack\":\"$STACK_NAME\"}"
         #endregion
+
         npx --yes aws-cdk@2.1126.0 deploy "$STACK_NAME" --require-approval never "${CDK_CONTEXT_ARGS[@]}"
-      - |
+
         #region agent log
-        source scripts/pipeline_debug_log.sh
         STACK_STATUS="$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_DEFAULT_REGION" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo unknown)"
         pipeline_debug_log "A" "buildspec-infra.yml:post-cdk" "CDK deploy finished" "{\"stackStatus\":\"$STACK_STATUS\"}"
         #endregion

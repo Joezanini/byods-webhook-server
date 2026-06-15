@@ -3,15 +3,17 @@ version: 0.2
 phases:
   pre_build:
     commands:
-      - source infra/scripts/pipeline_common.sh
-      - resolve_health_urls
-      - echo "Verify targets health=${HEALTH_URL} ready=${READY_URL} webhook=${WEBHOOK_URL}"
+      - |
+        set -euo pipefail
+        source infra/scripts/pipeline_common.sh
+        resolve_health_urls
+        echo "Verify targets health=${HEALTH_URL} ready=${READY_URL} webhook=${WEBHOOK_URL}"
   build:
     commands:
-      - source infra/scripts/pipeline_common.sh
-      - resolve_health_urls
       - |
         set +e
+        source infra/scripts/pipeline_common.sh
+        resolve_health_urls
         HEALTH_STATUS="fail"
         READINESS_STATUS="unknown"
         WEBHOOK_STATUS="fail"
