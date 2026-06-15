@@ -45,7 +45,8 @@ phases:
           --region "$AWS_DEFAULT_REGION" \
           --query 'services[0].{desired:desiredCount,running:runningCount,taskDef:taskDefinition}' \
           --output json 2>/dev/null || echo '{}')"
-        pipeline_debug_log "B" "buildspec-infra.yml:pre-cdk" "ECS state before infra CDK deploy" "{\"ecs\":$ECS_STATE,\"commit\":\"${CODEBUILD_RESOLVED_SOURCE_VERSION:-unknown}\"}"
+        pipeline_debug_log "B" "buildspec-infra.yml:pre-cdk" "ECS state before infra CDK deploy" \
+          "ecs=$ECS_STATE" "commit=${CODEBUILD_RESOLVED_SOURCE_VERSION:-unknown}"
         #endregion
 
         cd infra
@@ -69,12 +70,14 @@ phases:
         fi
 
         #region agent log
-        pipeline_debug_log "E" "buildspec-infra.yml:cdk-deploy" "Starting CDK deploy" "{\"desiredCount\":0,\"cdkContext\":\"${CDK_CONTEXT_ARGS[*]}\",\"stack\":\"$STACK_NAME\"}"
+        pipeline_debug_log "E" "buildspec-infra.yml:cdk-deploy" "Starting CDK deploy" \
+          "desiredCount=0" "cdkContext=${CDK_CONTEXT_ARGS[*]}" "stack=$STACK_NAME"
         #endregion
 
         npx --yes aws-cdk@2.1126.0 deploy "$STACK_NAME" --require-approval never "${CDK_CONTEXT_ARGS[@]}"
 
         #region agent log
         STACK_STATUS="$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_DEFAULT_REGION" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo unknown)"
-        pipeline_debug_log "A" "buildspec-infra.yml:post-cdk" "CDK deploy finished" "{\"stackStatus\":\"$STACK_STATUS\"}"
+        pipeline_debug_log "A" "buildspec-infra.yml:post-cdk" "CDK deploy finished" \
+          "stackStatus=$STACK_STATUS"
         #endregion

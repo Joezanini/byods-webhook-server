@@ -7,23 +7,46 @@ pipeline_debug_log() {
   local hypothesis_id="${1:?hypothesisId required}"
   local location="${2:?location required}"
   local message="${3:?message required}"
-  local data="${4:-{}}"
-  local run_id="${5:-${CODEBUILD_BUILD_ID:-local}}"
-  local timestamp
-  timestamp="$(python3 -c 'import time; print(int(time.time()*1000))')"
+  shift 3
 
   local payload
-  payload="$(HYPOTHESIS_ID="$hypothesis_id" LOCATION="$location" MESSAGE="$message" DATA="$data" RUN_ID="$run_id" TIMESTAMP="$timestamp" python3 - <<'PY'
-import json, os
-print(json.dumps({
-    "sessionId": "7930bc",
-    "hypothesisId": os.environ["HYPOTHESIS_ID"],
-    "location": os.environ["LOCATION"],
-    "message": os.environ["MESSAGE"],
-    "data": json.loads(os.environ["DATA"]),
-    "runId": os.environ["RUN_ID"],
-    "timestamp": int(os.environ["TIMESTAMP"]),
-}))
+  payload="$(PDL_HYPOTHESIS_ID="$hypothesis_id" \
+    PDL_LOCATION="$location" \
+    PDL_MESSAGE="$message" \
+    PDL_RUN_ID="${CODEBUILD_BUILD_ID:-local}" \
+    python3 - "$@" <<'PY'
+import json
+import os
+import sys
+import time
+
+
+def parse_value(raw: str):
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
+
+
+data = {}
+for arg in sys.argv[1:]:
+    key, sep, value = arg.partition("=")
+    if sep:
+        data[key] = parse_value(value)
+
+print(
+    json.dumps(
+        {
+            "sessionId": "7930bc",
+            "hypothesisId": os.environ["PDL_HYPOTHESIS_ID"],
+            "location": os.environ["PDL_LOCATION"],
+            "message": os.environ["PDL_MESSAGE"],
+            "data": data,
+            "runId": os.environ["PDL_RUN_ID"],
+            "timestamp": int(time.time() * 1000),
+        }
+    )
+)
 PY
 )"
 
