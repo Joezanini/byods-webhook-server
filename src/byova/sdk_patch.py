@@ -91,7 +91,11 @@ class CatalogVoiceVirtualAgentService(VoiceVirtualAgentService):
         request: byova_common_pb2.ListVARequest,
         context: grpc.aio.ServicerContext,
     ) -> byova_common_pb2.ListVAResponse:
+        invocation_metadata = dict(context.invocation_metadata())
         if self._config.verify_tokens:
+            if not invocation_metadata.get("authorization"):
+                # ALB gRPC health checks probe ListVirtualAgents without auth metadata.
+                return byova_common_pb2.ListVAResponse()
             await self._verify_context(context)
 
         refresh = getattr(self._server, "_catalog_refresh", None)
@@ -109,7 +113,6 @@ class CatalogVoiceVirtualAgentService(VoiceVirtualAgentService):
             info.is_default = entry.is_default
             agent_names.append(entry.virtual_agent_name)
 
-        invocation_metadata = dict(context.invocation_metadata())
         tracking_id = invocation_metadata.get("trackingid")
 
         event = ListVirtualAgentsEvent(

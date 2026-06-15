@@ -37,10 +37,17 @@ phases:
           --desired-count 1 \
           --force-new-deployment \
           --region "$AWS_DEFAULT_REGION" >/dev/null
-        aws ecs wait services-stable \
+        if ! aws ecs wait services-stable \
           --cluster "$ECS_CLUSTER" \
           --services "$ECS_SERVICE" \
-          --region "$AWS_DEFAULT_REGION"
+          --region "$AWS_DEFAULT_REGION"; then
+          #region agent log
+          FAILED="$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region "$AWS_DEFAULT_REGION" --query 'services[0].{desired:desiredCount,running:runningCount,pending:pendingCount,events:events[:3]}' --output json)"
+          pipeline_debug_log "O" "buildspec-deploy.yml:wait-failed" "ECS services-stable waiter failed" \
+            "ecs=$FAILED"
+          #endregion
+          exit 255
+        fi
 
         #region agent log
         AFTER="$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" --region "$AWS_DEFAULT_REGION" --query 'services[0].{desired:desiredCount,running:runningCount,taskDef:taskDefinition}' --output json)"
